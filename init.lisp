@@ -29,7 +29,7 @@
   (when load-css
     (funcall load-css ".lem-cursor { animation: none; }")))
 
-;;; Flat frame around floating windows, no drop shadow.
+;;; Flat frame around floating windows, no drop shadow, no rounded corners.
 ;;;
 ;;; Popup windows created with a border -- the M-x prompt and its completion
 ;;; list, along with the other popup windows -- get the wrapper class
@@ -37,7 +37,9 @@
 ;;; `box-shadow: 4px 4px 16px black, 0 0 0 1px rgba(128, 128, 128, 0.2)`: the
 ;;; first shadow is the soft black halo, the second the faint grey hairline.
 ;;; One spread-only shadow replaces both, so the halo is gone and a single 1px
-;;; white line is all that is left.  It is a box-shadow rather than a `border`
+;;; white line is all that is left.  The 8px radius that editor.css puts on the
+;;; same rule is switched off too, so the prompt box and the candidate list are
+;;; plain rectangles.  It is a box-shadow rather than a `border`
 ;;; on purpose: the wrapper is sized in JavaScript from the character grid, and
 ;;; a real border would eat 1px of the padding box on every side and nudge the
 ;;; popup's text out of alignment with the buffer behind it.  Same specificity
@@ -45,7 +47,7 @@
 (let ((load-css (uiop:find-symbol* :load-css :lem-server nil)))
   (when load-css
     (funcall load-css
-             ".lem-editor__floating-window--bordered { box-shadow: 0 0 0 1px #ffffff; }")))
+             ".lem-editor__floating-window--bordered { box-shadow: 0 0 0 1px #ffffff; border-radius: 0; }")))
 
 ;;; Font: the one Emacs uses.
 ;;;
@@ -412,6 +414,99 @@ the marginalia section below, which is why it is applied to the *matched* set
 
 (define-key lem/completion-mode::*completion-mode-keymap*
   "Space" 'completion-insert-space-and-continue)
+
+;;; Return selects and submits in one keystroke.
+;;;
+;;; `Return` in *completion-mode-keymap* is COMPLETION-SELECT
+;;; (src/ext/completion-mode.lisp:115): it inserts the focused candidate into
+;;; the prompt and closes the popup.  Submitting is a second Return, because
+;;; PROMPT-EXECUTE is bound to `Return` in the prompt's own keymap
+;;; (src/ext/prompt-window.lisp:79).  Vertico submits on the first Return, so
+;;; this binds Return to a command that inserts and then submits.
+;;;
+;;; Two cases deliberately keep the plain insert-only behaviour: a directory
+;;; candidate, where Emacs also stays in the minibuffer and lists the
+;;; directory instead of exiting, and any buffer outside a prompt -- an
+;;; lsp-mode completion list, say -- where there is nothing to submit.  With no
+;;; candidate focused (an empty list, see the CONTINUE-COMPLETION patch below)
+;;; Return submits what was typed.
+
+(defun prompt-window-active-p ()
+  (and (lem/prompt-window:current-prompt-window) t))
+
+(define-command completion-select-and-execute () ()
+  "Insert the focused candidate and submit the prompt."
+  (let* ((context lem/completion-mode::*completion-context*)
+         (popup (and context (lem/completion-mode::context-popup-menu context)))
+         (item (and popup (lem/popup-menu:get-focus-item popup)))
+         (label (and item (lem/completion-mode:completion-item-label item)))
+         (directory-p (and label
+                           (plusp (length label))
+                           (char= (char label (1- (length label))) #\/))))
+    (cond ((null item)
+           (when (prompt-window-active-p)
+             (lem/prompt-window::prompt-execute)))
+          (t
+           (lem/completion-mode::completion-select)
+           (unless directory-p
+             (when (prompt-window-active-p)
+               (lem/prompt-window::prompt-execute)))))))
+
+(define-key lem/completion-mode::*completion-mode-keymap*
+  "Return" 'completion-select-and-execute)
+
+;;; Keep the completion context alive when nothing matches.
+;;;
+;;; CONTINUE-COMPLETION calls COMPLETION-END as soon as the candidate list comes
+;;; back empty (src/ext/completion-mode.lisp:328-330): the popup quits,
+;;; completion-mode turns off and *COMPLETION-CONTEXT* is cleared.  The prompt
+;;; then remembers nothing about the completion, so one character too many ends
+;;; it for good -- deleting that character ran DELETE-PREVIOUS-CHAR as the plain
+;;; prompt command, which never refreshes.
+;;;
+;;; The replacement keeps the context and the mode, and shrinks the popup to its
+;;; single empty row instead of quitting it, so the next keystroke refreshes
+;;; through COMPLETION-REFRESH and the candidates come back.  Return in that
+;;; state submits the typed input, as COMPLETION-SELECT-AND-EXECUTE does when
+;;; no candidate is focused -- the same thing vertico does with an empty list.
+
+(defvar *original-continue-completion* nil
+  "The unpatched CONTINUE-COMPLETION, captured the first time this file is
+loaded so that reloading init.lisp replaces the patch instead of stacking
+another wrapper on top of it.")
+
+#+sbcl
+(sb-ext:without-package-locks
+  (progn
+    (setf *original-continue-completion*
+          (or *original-continue-completion*
+              (symbol-function 'lem/completion-mode::continue-completion)))
+    (setf (symbol-function 'lem/completion-mode::continue-completion)
+          (lambda (context)
+            (lem/completion-mode::compute-completion-items
+             context
+             (lambda (items)
+               (cond
+                 ((null items)
+                  (let ((context lem/completion-mode::*completion-context*))
+                    (when (and context
+                               (lem/completion-mode::context-popup-menu context))
+                      (lem:popup-menu-update
+                       (lem/completion-mode::context-popup-menu context)
+                       nil
+                       :print-spec (lem/completion-mode::make-print-spec nil)))))
+                 (t
+                  (when lem/completion-mode::*completion-context*
+                    (lem:popup-menu-update
+                     (lem/completion-mode::context-popup-menu
+                      lem/completion-mode::*completion-context*)
+                     items
+                     :print-spec (lem/completion-mode::make-print-spec items))
+                    (lem/completion-mode::call-focus-action))))))
+            (when lem/completion-mode::*completion-reverse*
+              (ignore-errors
+                (lem/completion-mode::completion-end-of-buffer)))))))
+
 
 (setf lem:*prompt-command-completion-function* 'orderless-command-completion)
 (setf lem:*prompt-buffer-completion-function* 'orderless-buffer-completion)
