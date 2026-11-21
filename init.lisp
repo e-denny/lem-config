@@ -44,12 +44,24 @@
 ;;; editors break lines and scroll in the same shape.  The advance is 9.6px at
 ;;; that size and the frontend floors it to 9, which condenses glyphs by ~4%.
 ;;;
+;;; The second family is not decoration.  The frontend draws buffer text on a
+;;; canvas with `ctx.font` set to this string, and WebKitGTK's canvas text does
+;;; not run fontconfig fallback for Private Use Area codepoints: with only
+;;; "Adwaita Mono" in the stack, every Nerd Font icon (eza --icons, nerd font
+;;; glyphs from any program) is drawn as Adwaita Mono's .notdef box.  Normal
+;;; scripts such as CJK do fall back, which is why only icons are affected.
+;;; Naming the Nerd Font explicitly resolves them.  SauceCodePro Nerd Font
+;;; Mono is patched from Source Code Pro, so its advance is the same 9.6px and
+;;; the grid does not move; the ASCII range still comes from Adwaita Mono.
+;;
 ;;; SET-FONT exists for every frontend, but only the server/webview one takes a
 ;;; CSS family name, so this is guarded the same way as the cursor rule.
 (let ((set-font (uiop:find-symbol* :set-font :lem nil))
       (server-frontend-p (uiop:find-symbol* :load-css :lem-server nil)))
   (when (and set-font server-frontend-p)
-    (funcall set-font :name "Adwaita Mono" :size 16)))
+    (funcall set-font
+             :name "Adwaita Mono, \"SauceCodePro Nerd Font Mono\""
+             :size 16)))
 
 ;;; Vertico-style completion.
 ;;;
