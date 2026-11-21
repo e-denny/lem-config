@@ -189,9 +189,12 @@ another copy on top of it.")
               (symbol-function 'lem/popup-menu::move-focus)))
     (setf (symbol-function 'lem/popup-menu::move-focus)
           (lambda (popup-menu function)
-            (let ((lem-core::*scroll-recenter-p* nil))
-              (funcall *original-move-focus* popup-menu function))
-            (align-popup-selection popup-menu)))))
+            ;; POPUP-MENU is NIL while a completion has no matching candidates:
+            ;; its popup is hidden, and TAB/Up/Down must not walk into it.
+            (when popup-menu
+              (let ((lem-core::*scroll-recenter-p* nil))
+                (funcall *original-move-focus* popup-menu function))
+              (align-popup-selection popup-menu))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Orderless-style matching
@@ -464,16 +467,53 @@ the marginalia section below, which is why it is applied to the *matched* set
 ;;; it for good -- deleting that character ran DELETE-PREVIOUS-CHAR as the plain
 ;;; prompt command, which never refreshes.
 ;;;
-;;; The replacement keeps the context and the mode, and shrinks the popup to its
-;;; single empty row instead of quitting it, so the next keystroke refreshes
-;;; through COMPLETION-REFRESH and the candidates come back.  Return in that
-;;; state submits the typed input, as COMPLETION-SELECT-AND-EXECUTE does when
-;;; no candidate is focused -- the same thing vertico does with an empty list.
+;;; The replacement keeps the context and the mode, and hides the popup instead
+;;; of shrinking it to nothing: a one-row box spills its 10px CSS padding onto
+;;; the row below (the frontend pads the wrapper by borderOffsetY), which is the
+;;; prompt's own row, so an empty popup would cover the "Command:" line.  The
+;;; next keystroke refreshes through COMPLETION-REFRESH and the popup reappears
+;;; where it was; its style -- the :horizontally-above-window gravity set above
+;;; -- is remembered for the reopen so the position does not change.  Return in
+;;; that state submits the typed input, as COMPLETION-SELECT-AND-EXECUTE does
+;;; when no candidate is focused: what vertico does with an empty list.
 
 (defvar *original-continue-completion* nil
   "The unpatched CONTINUE-COMPLETION, captured the first time this file is
 loaded so that reloading init.lisp replaces the patch instead of stacking
 another wrapper on top of it.")
+
+(defvar *completion-popup-style* nil
+  "Style of the completion popup that was hidden because nothing matched.
+DISPLAY-POPUP-MENU takes a keyword list or a style object; the popup is reopened
+with this one so it keeps the gravity it was created with.")
+
+(defun hide-completion-popup (context)
+  "Delete CONTEXT's popup window, remembering its style, keep the context.
+The completion stays alive with no candidates on screen."
+  (let ((popup (lem/completion-mode::context-popup-menu context)))
+    (when popup
+      (setf *completion-popup-style*
+            (lem/popup-window::popup-window-style popup))
+      (lem:popup-menu-quit popup)
+      (setf (lem/completion-mode::context-popup-menu context) nil))))
+
+(defun refresh-completion-popup (context items)
+  "Show ITEMS in CONTEXT's popup, reopening it with its style when hidden."
+  (let ((popup (lem/completion-mode::context-popup-menu context)))
+    (if popup
+        (lem:popup-menu-update popup items
+                               :print-spec (lem/completion-mode::make-print-spec items))
+        (setf (lem/completion-mode::context-popup-menu context)
+              (apply #'lem:display-popup-menu
+                     items
+                     :action-callback
+                     (lambda (item)
+                       (lem/completion-mode::completion-insert
+                        (lem:current-point) item)
+                       (lem/completion-mode:completion-end))
+                     :print-spec (lem/completion-mode::make-print-spec items)
+                     (when *completion-popup-style*
+                       (list :style *completion-popup-style*)))))))
 
 #+sbcl
 (sb-ext:without-package-locks
@@ -486,23 +526,13 @@ another wrapper on top of it.")
             (lem/completion-mode::compute-completion-items
              context
              (lambda (items)
-               (cond
-                 ((null items)
-                  (let ((context lem/completion-mode::*completion-context*))
-                    (when (and context
-                               (lem/completion-mode::context-popup-menu context))
-                      (lem:popup-menu-update
-                       (lem/completion-mode::context-popup-menu context)
-                       nil
-                       :print-spec (lem/completion-mode::make-print-spec nil)))))
-                 (t
-                  (when lem/completion-mode::*completion-context*
-                    (lem:popup-menu-update
-                     (lem/completion-mode::context-popup-menu
-                      lem/completion-mode::*completion-context*)
-                     items
-                     :print-spec (lem/completion-mode::make-print-spec items))
-                    (lem/completion-mode::call-focus-action))))))
+               (let ((context lem/completion-mode::*completion-context*))
+                 (when context
+                   (if items
+                       (progn
+                         (refresh-completion-popup context items)
+                         (lem/completion-mode::call-focus-action))
+                       (hide-completion-popup context))))))
             (when lem/completion-mode::*completion-reverse*
               (ignore-errors
                 (lem/completion-mode::completion-end-of-buffer)))))))
