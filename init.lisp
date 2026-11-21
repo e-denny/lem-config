@@ -601,18 +601,15 @@ the same screen column on every row, the way marginalia aligns its fields."
         (append annotated (nthcdr (length shown) items)))))
 
 
-;;; Ghostty-backed terminal -- DISABLED 2026-11-20.
+;;; Ghostty-backed terminal (user extension).
 ;;;
-;;; The libghostty-vt extension is not part of the current Lem install (the
-;;; editor is a stock build of the fork).  The sources are kept for later at
-;;; ~/ghostty-terminal/; restore this block after adding the extension back
-;;; under extensions/ghostty-terminal/.  Wrapped in a block comment so the
-;;; whole description stays readable while the code stays inert.
+;;; The libghostty-vt terminal now lives outside the Lem tree, as a user
+;;; extension under ~/.config/lem/extensions/ghostty-terminal/.  It is
+;;; loaded here at startup instead of being compiled into the image, so
+;;; the stock Lem binary is left untouched.  ASDF finds its .asd through
+;;; the central-registry entry below; the system sources and its vendored
+;;; libghostty-vt build are resolved relative to that .asd.
 
-#|
-
-;;; Ghostty-backed terminal.
-;;;
 ;;; lem-terminal draws its terminal with libvterm.  This extension replaces
 ;;; that backend with libghostty-vt, the standalone VT engine from Ghostty:
 ;;; it handles modern keyboard/mouse protocols, bracketed paste, 256/24-bit
@@ -621,15 +618,15 @@ the same screen column on every row, the way marginalia aligns its fields."
 ;;; no native helper to build for this extension itself.
 ;;;
 ;;; Requirements: SBCL 2.6+, libghostty-vt 1.0+ (a linux/x64 build is
-;;; vendored in extensions/ghostty-terminal/lib/), and cffi-libffi from
+;;; vendored in the extension's lib/), and cffi-libffi from
 ;;; Quicklisp.  M-x ghostty-terminal opens a shell in the current
 ;;; directory; inside the terminal C-c goes to the program, so open it from
 ;;; another buffer with C-c t or from anywhere with M-x.  M-[ enters copy
 ;;; mode and Escape returns to the live terminal.
 ;;;
 ;;; The library path can be overridden with LEM_GHOSTTY_VT_LIBRARY, and
-;;; other platforms can build it with scripts/build-ghostty-vt.lisp.
-(let ((source (asdf:system-relative-pathname :lem "extensions/ghostty-terminal/")))
+;;; other platforms can build it with the extension's build-ghostty-vt.lisp.
+(let ((source (merge-pathnames "extensions/ghostty-terminal/" (lem-home))))
   (pushnew source asdf:*central-registry* :test #'equal))
 (handler-case
     (progn
@@ -645,8 +642,6 @@ the same screen column on every row, the way marginalia aligns its fields."
   (error (condition)
     (format *error-output*
             "~&lem-ghostty-terminal unavailable: ~A~%" condition)))
-
-|#
 
 ;;; MCP server, started automatically at launch.
 ;;;

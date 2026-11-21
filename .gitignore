@@ -6,3 +6,6 @@ Session.vim
 settings.sexp
 *.log
 *~
+
+# User extension checkouts; each has its own repository.
+/extensions/
