@@ -620,9 +620,11 @@ the same screen column on every row, the way marginalia aligns its fields."
 ;;; Requirements: SBCL 2.6+, libghostty-vt 1.0+ (a linux/x64 build is
 ;;; vendored in the extension's lib/), and cffi-libffi from
 ;;; Quicklisp.  M-x ghostty-terminal opens a shell in the current
-;;; directory; inside the terminal C-c goes to the program, so open it from
-;;; another buffer with C-c t or from anywhere with M-x.  M-[ enters copy
-;;; mode and Escape returns to the live terminal.
+;;; directory.  The default semi-char input mode reserves C-c for terminal
+;;; control (C-c C-c sends an interrupt) and leaves C-x to Lem, so C-x C-c
+;;; quits; C-c M-d switches to char mode, where every key, including C-c
+;;; and C-x, goes to the program.  M-[ enters copy mode and Escape returns
+;;; to the live terminal.
 ;;;
 ;;; The library path can be overridden with LEM_GHOSTTY_VT_LIBRARY, and
 ;;; other platforms can build it with the extension's build-ghostty-vt.lisp.
