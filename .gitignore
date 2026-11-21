@@ -1,0 +1,8 @@
+# Lem runtime state — regenerated, machine-specific, not configuration.
+history/
+logs/
+packages/
+Session.vim
+settings.sexp
+*.log
+*~
