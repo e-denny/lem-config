@@ -637,9 +637,18 @@ the same screen column on every row, the way marginalia aligns its fields."
       ;; does not exist and a package-qualified symbol here would signal a
       ;; reader error before HANDLER-CASE could report the real cause.
       (let* ((package (find-package :lem-ghostty-terminal))
-             (setup (and package (find-symbol "SETUP" package))))
+             (setup (and package (find-symbol "SETUP" package)))
+             (osc52 (and package
+                         (find-symbol "GHOSTTY-TERMINAL-ENABLE-OSC52"
+                                      package))))
         (if setup
-            (funcall setup :key "C-c t")
+            (progn
+              (funcall setup :key "C-c t")
+              ;; Let programs (tmux, neovim, a remote session) set the
+              ;; clipboard with OSC 52.  The extension leaves this off by
+              ;; default so that no program can silently overwrite it.
+              (when osc52
+                (setf (variable-value osc52 :global) t)))
             (error "package LEM-GHOSTTY-TERMINAL was not created"))))
   (error (condition)
     (format *error-output*
