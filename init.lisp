@@ -1,5 +1,20 @@
 (in-package :lem-user)
 
+;;; Forward declarations.
+;;;
+;;; Two functions are called above the point where they are defined, and the
+;;; file is compiled top to bottom at load, so a fresh start printed
+;;;
+;;;   caught STYLE-WARNING: undefined function: ALIGN-POPUP-SELECTION
+;;;   caught STYLE-WARNING: undefined function: MARGINALIA-ANNOTATE-COMMAND-ITEMS
+;;;
+;;; DECLAIM FTYPE marks them as known functions before their DEFUNs are seen.
+;;; Wildcard argument and return types keep every call unchecked, so this
+;;; suppresses the warning without asserting anything about the signatures.
+(declaim (ftype (function * *)
+                align-popup-selection
+                marginalia-annotate-command-items))
+
 ;;; Turn off the blinking cursor in the webview / browser frontend.
 ;;;
 ;;; The frontend stylesheet (frontends/server/frontend/editor.css) animates
