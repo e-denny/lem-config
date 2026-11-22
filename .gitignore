@@ -4,6 +4,7 @@ logs/
 packages/
 Session.vim
 settings.sexp
+lem-tutor-saves/
 *.log
 *~
 
