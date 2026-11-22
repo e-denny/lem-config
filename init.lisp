@@ -755,6 +755,59 @@ the same screen column on every row, the way marginalia aligns its fields."
         (append annotated (nthcdr (length shown) items)))))
 
 
+;;; Which-key: show the keys that follow a prefix.
+;;;
+;;; Lem ships a transient popup (extensions/transient): a bottomside window that
+;;; lists a keymap's bindings, shown by KEYMAP-ACTIVATE while a prefix key is
+;;; being read, after *transient-popup-delay* milliseconds.  Out of the box it
+;;; only reacts to keymaps made with DEFINE-TRANSIENT -- so the built-in prefixes
+;;; such as C-x and C-c show nothing -- or to *transient-always-show*, which also
+;;; leaves the root keymap on screen permanently.
+;;;
+;;; RESOLVE-TRANSIENT-KEYMAP decides what KEYMAP-ACTIVATE displays.  The advice
+;;; accepts any pending keymap, so every prefix opens the popup, and leaves the
+;;; original's answers alone for the cases it already handles (explicit
+;;; transients and mode-level transient keymaps).  When a sequence finishes or is
+;;; cancelled, KEYMAP-ACTIVATE is called with *root-keymap*, which the advice
+;;; ignores, so the popup disappears again -- which-key behaviour rather than a
+;;; permanent cheat sheet.  The delay is the extension's: at 500ms a sequence
+;;; typed at speed never draws anything.
+;;;
+;;; M-x which-key-mode turns it off and on.  Symbols are looked up at run time
+;;; because a package-qualified LEM/TRANSIENT::RESOLVE-TRANSIENT-KEYMAP would be
+;;; a reader error if the extension were missing, before the handler could
+;;; report the real cause.
+
+(defvar *original-resolve-transient-keymap* nil
+  "The unadvised RESOLVE-TRANSIENT-KEYMAP, captured on the first load.")
+
+(defvar *which-key-mode* t
+  "T when a prefix key opens the transient popup, i.e. which-key behaviour.")
+
+(define-command which-key-mode () ()
+  "Toggle which-key: show the keybindings that follow a prefix key."
+  (setf *which-key-mode* (not *which-key-mode*))
+  (message "which-key ~:[off~;on~]" *which-key-mode*))
+
+(handler-case
+    (progn
+      (asdf:load-system :lem-transient)
+      (let ((resolve (find-symbol "RESOLVE-TRANSIENT-KEYMAP" :lem/transient))
+            (root (find-symbol "*ROOT-KEYMAP*" :lem)))
+        (when (and resolve root)
+          (setf *original-resolve-transient-keymap*
+                (or *original-resolve-transient-keymap*
+                    (symbol-function resolve)))
+          (setf (symbol-function resolve)
+                (lambda (&optional keymap)
+                  (or (funcall *original-resolve-transient-keymap* keymap)
+                      (and *which-key-mode*
+                           keymap
+                           (not (eq keymap (symbol-value root)))
+                           keymap)))))))
+  (error (condition)
+    (format *error-output* "~&which-key unavailable: ~A~%" condition)))
+
 ;;; Ghostty-backed terminal (user extension).
 ;;;
 ;;; The libghostty-vt terminal now lives outside the Lem tree, as a user
