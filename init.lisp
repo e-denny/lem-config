@@ -492,8 +492,10 @@ with this one so it keeps the gravity it was created with.")
 The completion stays alive with no candidates on screen."
   (let ((popup (lem/completion-mode::context-popup-menu context)))
     (when popup
+      ;; POPUP-WINDOW-STYLE is specialized on the window, not on the menu.
       (setf *completion-popup-style*
-            (lem/popup-window::popup-window-style popup))
+            (lem/popup-window::popup-window-style
+             (lem/popup-menu::popup-menu-window popup)))
       (lem:popup-menu-quit popup)
       (setf (lem/completion-mode::context-popup-menu context) nil))))
 
