@@ -196,8 +196,10 @@ again afterwards, which is what the build expects of its own packages."
               symbol)
          #+sbcl (sb-ext:lock-package package))))))
 
-(dolist (extension '("organ-mode" "cltpt"))
-  (pushnew (merge-pathnames (format nil "extensions/~a/" extension) (lem-home))
+;;; organ-mode and cltpt are checkouts in extensions/, each with its own
+;;; repository; org-latex-preview is configuration, so it lives here.
+(dolist (extension '("extensions/organ-mode/" "extensions/cltpt/" "org-latex-preview/"))
+  (pushnew (merge-pathnames extension (lem-home))
            asdf:*central-registry* :test #'equal))
 
 (handler-case
@@ -219,6 +221,19 @@ again afterwards, which is what the build expects of its own packages."
     (load (merge-pathnames "organ-extras.lisp" (lem-home)))
   (error (condition)
     (format *error-output* "~&organ-mode extras unavailable: ~A~%" condition)))
+
+;;; org-latex-preview renders latex fragments in an organ buffer as the images
+;;; latex typesets, the way org-mode's own preview does.  It is a system rather
+;;; than a file because it adds text objects to cltpt, whose rules are rebuilt
+;;; as one set, and it is part of this repository because it is configuration,
+;;; not a checkout of someone else's work.  See its sources for what it
+;;; changes: the webview frontend cannot draw images at all, so the frontend is
+;;; patched at run time and the server side of the jsonrpc protocol is taught
+;;; to send them.
+(handler-case
+    (asdf:load-system "org-latex-preview")
+  (error (condition)
+    (format *error-output* "~&org-latex-preview unavailable: ~A~%" condition)))
 
 ;;; What the agenda and roam commands scan.  The older Emacs org tree under
 ;;; ~/org is indexed, recursively because its notes sit in agenda/ and roam/.
