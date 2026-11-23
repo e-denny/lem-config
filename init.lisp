@@ -148,6 +148,80 @@
   (error (condition)
     (format *error-output* "~&which-key unavailable: ~A~%" condition)))
 
+;;; organ-mode (user extension): org-mode-style notes, agenda and roam.
+;;;
+;;; organ-mode lives outside the Lem tree, in extensions/organ-mode/, next to
+;;; cltpt (extensions/cltpt), the text parser it is built on; both are found
+;;; through the same central-registry entry as the extensions above.  Loading
+;;; the system is the whole installation: it binds C-c r to the organ keymap,
+;;; registers the major mode for *.org files, and hooks the latex-preview
+;;; module into the mode.  The agenda and roam commands additionally need
+;;; *ORGAN-FILES* (set below); without it they only say to configure it.
+;;;
+;;; Its Lisp dependencies (local-time, ironclad, clingon, fiveam,
+;;; bordeaux-threads) come from the Quicklisp dist this Lem was built against
+;;; (~/lem/.qlot) and were installed when organ-mode was, so none of them is
+;;; fetched at startup.
+;;;
+;;; Compatibility shims for the latex-preview module.  It targets a Lem whose
+;;; frontend interface reports image metrics and image support
+;;; (LEM-IF:FONT-EM-PIXELS, LEM-IF:CELL-HEIGHT, LEM:IMAGE-SUPPORT-P); this
+;;; build has none of the three, and a package-qualified symbol that does not
+;;; exist is a reader error, so the file would not even load.  Each symbol is
+;;; added only when missing and answers NIL, which is the answer the module
+;;; already provides for: the preview commands then report that the frontend
+;;; cannot draw images, and every other part of organ-mode is unaffected.  A
+;;; future Lem that does have these interfaces keeps them untouched.  Lem
+;;; locks its packages, hence the unlock/lock around the interning.
+
+(defun ensure-interface-stub (package-designator symbol-name)
+  "Export SYMBOL-NAME from PACKAGE-DESIGNATOR as a function returning NIL.
+Leaves the symbol alone when it is already fbound, so a Lem that has the real
+interface keeps it.  The package is unlocked for the interning and locked
+again afterwards, which is what the build expects of its own packages."
+  (let* ((package (find-package package-designator))
+         (symbol (and package (find-symbol symbol-name package))))
+    (cond
+      ((null package) nil)
+      ((and symbol (fboundp symbol)) symbol)
+      (t
+       #+sbcl (sb-ext:unlock-package package)
+       (unwind-protect
+            (let ((symbol (intern symbol-name package)))
+              (export symbol package)
+              (setf (symbol-function symbol)
+                    (lambda (&rest arguments)
+                      (declare (ignore arguments))
+                      nil))
+              symbol)
+         #+sbcl (sb-ext:lock-package package))))))
+
+(dolist (extension '("organ-mode" "cltpt"))
+  (pushnew (merge-pathnames (format nil "extensions/~a/" extension) (lem-home))
+           asdf:*central-registry* :test #'equal))
+
+(handler-case
+    (progn
+      (dolist (spec '(("LEM-INTERFACE" "FONT-EM-PIXELS")
+                      ("LEM-INTERFACE" "CELL-HEIGHT")
+                      ("LEM" "IMAGE-SUPPORT-P")))
+        (ensure-interface-stub (first spec) (second spec)))
+      (asdf:load-system "organ-mode"))
+  (error (condition)
+    (format *error-output* "~&organ-mode unavailable: ~A~%" condition)))
+
+;;; What the agenda and roam commands scan.  The older Emacs org tree under
+;;; ~/org is indexed, recursively because its notes sit in agenda/ and roam/.
+;;; The variable is reached at run time for the same reason as the symbols
+;;; above, and this is skipped when the system failed to load.
+(let ((organ-files (find-symbol "*ORGAN-FILES*" :organ)))
+  (when organ-files
+    (setf (symbol-value organ-files)
+          '((:path ("/home/edgar/org/")
+             :glob "*.org"
+             :recurse t
+             :format "org-mode")))))
+
 ;;; Ghostty-backed terminal (user extension).
 ;;;
 ;;; The libghostty-vt terminal now lives outside the Lem tree, as a user
