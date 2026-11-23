@@ -210,6 +210,16 @@ again afterwards, which is what the build expects of its own packages."
   (error (condition)
     (format *error-output* "~&organ-mode unavailable: ~A~%" condition)))
 
+;;; organ-extras.lisp adds what organ-mode leaves out: faces for emphasis, code
+;;; spans, comments and math, and a Return that follows the link under point.
+;;; Both are keyed to organ-mode's internals, so the file is read here, after
+;;; the system is loaded and its packages exist, and a failure of its own does
+;;; not take organ-mode down with it.
+(handler-case
+    (load (merge-pathnames "organ-extras.lisp" (lem-home)))
+  (error (condition)
+    (format *error-output* "~&organ-mode extras unavailable: ~A~%" condition)))
+
 ;;; What the agenda and roam commands scan.  The older Emacs org tree under
 ;;; ~/org is indexed, recursively because its notes sit in agenda/ and roam/.
 ;;; The variable is reached at run time for the same reason as the symbols
