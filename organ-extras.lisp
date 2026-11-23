@@ -54,6 +54,13 @@
 (lem:define-attribute organ-comment-attribute
   (t :foreground :base03))
 
+;; organ-mode colours links :base0d and stops there.  Underlining is the one
+;; other thing this frontend can draw that a link wants (it has no italic and
+;; no images), and with the target and brackets concealed the description has
+;; nothing else left to mark it as a link.
+(lem:define-attribute organ-link-underlined-attribute
+  (t :foreground :base0d :underline t))
+
 (lem:define-attribute organ-math-attribute
   (t :foreground :base0a))
 
@@ -107,9 +114,9 @@ markers stay in the buffer one cursor move away."
 
 (defun organ-link-overlays (object buffer)
   "The link face over OBJECT, with the markup around a description hidden.
-`[[file:notes.org][the notes]]' draws as `the notes'.  A link without a
-description keeps its target visible and loses only the brackets: what the
-link points at is the only thing such a link has to show."
+`[[file:notes.org][the notes]]' draws as underlined `the notes'.  A link
+without a description keeps its target visible and loses only the brackets:
+what the link points at is the only thing such a link has to show."
   (let* ((begin (organ/organ-mode::begin-in-root object))
          (end (organ/organ-mode::end-in-root object))
          (text (cltpt/base:text-object-text object))
@@ -117,18 +124,18 @@ link points at is the only thing such a link has to show."
     (remove nil
             (if separator
                 (list (organ-object-face-overlay
-                       object buffer 'organ/organ-mode::organ-link-attribute)
+                       object buffer 'organ-link-underlined-attribute)
                       ;; everything up to the description, and the closing ]]
                       (organ-conceal-overlay buffer begin (+ begin separator 2)
-                                             'organ/organ-mode::organ-link-attribute)
+                                             'organ-link-underlined-attribute)
                       (organ-conceal-overlay buffer (- end 2) end
-                                             'organ/organ-mode::organ-link-attribute))
+                                             'organ-link-underlined-attribute))
                 (list (organ-object-face-overlay
-                       object buffer 'organ/organ-mode::organ-link-attribute)
+                       object buffer 'organ-link-underlined-attribute)
                       (organ-conceal-overlay buffer begin (+ begin 2)
-                                             'organ/organ-mode::organ-link-attribute)
+                                             'organ-link-underlined-attribute)
                       (organ-conceal-overlay buffer (- end 2) end
-                                             'organ/organ-mode::organ-link-attribute))))))
+                                             'organ-link-underlined-attribute))))))
 
 (macrolet ((define-object-face (type attribute)
              `(defmethod organ/organ-mode::text-object-overlays ((object ,type) buffer)
