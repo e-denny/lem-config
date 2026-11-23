@@ -18,6 +18,11 @@
 ;;; underline but not italic or strikethrough, so /italic/ is given a colour
 ;;; instead of a slant: on this frontend an italic-only face would be
 ;;; invisible.
+;;;
+;;; The markup itself is hidden rather than merely coloured: emphasis markers
+;;; and the [[target][...]] wrapper around a link are covered by :invisible
+;;; overlays, which Lem splices out of the drawn line.  They come back while
+;;; the cursor is inside them, so they stay editable.
 
 (in-package :lem-user)
 
@@ -53,9 +58,7 @@
   (t :foreground :base0a))
 
 (defun organ-object-face-overlay (object buffer attribute)
-  "An overlay covering OBJECT's span in BUFFER, drawn with ATTRIBUTE.
-The span includes the delimiters ('/italic/' as well as 'italic'), because
-organ-mode leaves them visible and colouring only the inside reads as a seam."
+  "An overlay covering OBJECT's span in BUFFER, drawn with ATTRIBUTE."
   (lem:make-overlay
    (organ/utils:char-offset-to-point buffer
                                      (organ/organ-mode::begin-in-root object))
@@ -63,17 +66,92 @@ organ-mode leaves them visible and colouring only the inside reads as a seam."
                                      (organ/organ-mode::end-in-root object))
    attribute))
 
+(defvar *organ-conceal-markup* t
+  "When true, emphasis markers and link wrappers are hidden from the drawn line.
+Set it to NIL to read and edit the raw markup again; the change takes effect
+on the next redraw of the buffer (organ-mode rebuilds its overlays after every
+change), so tag a character and undo it if a file looks wrong.")
+
+(defun organ-conceal-overlay (buffer begin end attribute)
+  "An overlay hiding the characters in [BEGIN, END) of BUFFER, or NIL when
+*ORGAN-CONCEAL-MARKUP* is NIL.
+Lem treats :invisible overlays as a splice, so the characters leave the drawn
+line instead of being painted over in the background colour.  The enter/leave
+hooks are the ones Lem installs for folds: driving the cursor into the hidden
+characters brings them back, which keeps the markup editable.  ATTRIBUTE is
+only seen once the text is revealed, so it is the face of the thing it hides
+(an overlay must carry one: LEM:MAKE-OVERLAY rejects a NIL attribute).  NIL for
+an empty range, so callers can pass the result straight into a list."
+  (when (and *organ-conceal-markup* (< begin end))
+    (let ((overlay (lem:make-overlay
+                    (organ/utils:char-offset-to-point buffer begin)
+                    (organ/utils:char-offset-to-point buffer end)
+                    attribute)))
+      (lem:overlay-put overlay :invisible t)
+      (lem:overlay-put overlay :cursor-enter-functions
+                       '(lem-core::reveal-overlay-on-cursor-enter))
+      (lem:overlay-put overlay :cursor-leave-functions
+                       '(lem-core::hide-overlay-on-cursor-leave))
+      overlay)))
+
+(defun organ-emphasis-overlays (object buffer attribute)
+  "The emphasis face over OBJECT, with its one-character markers hidden.
+`*bold*' draws as bold text and `/italic/' as the italic face, while the
+markers stay in the buffer one cursor move away."
+  (let ((begin (organ/organ-mode::begin-in-root object))
+        (end (organ/organ-mode::end-in-root object)))
+    (remove nil
+            (list (organ-object-face-overlay object buffer attribute)
+                  (organ-conceal-overlay buffer begin (1+ begin) attribute)
+                  (organ-conceal-overlay buffer (1- end) end attribute)))))
+
+(defun organ-link-overlays (object buffer)
+  "The link face over OBJECT, with the markup around a description hidden.
+`[[file:notes.org][the notes]]' draws as `the notes'.  A link without a
+description keeps its target visible and loses only the brackets: what the
+link points at is the only thing such a link has to show."
+  (let* ((begin (organ/organ-mode::begin-in-root object))
+         (end (organ/organ-mode::end-in-root object))
+         (text (cltpt/base:text-object-text object))
+         (separator (search "][" text)))
+    (remove nil
+            (if separator
+                (list (organ-object-face-overlay
+                       object buffer 'organ/organ-mode::organ-link-attribute)
+                      ;; everything up to the description, and the closing ]]
+                      (organ-conceal-overlay buffer begin (+ begin separator 2)
+                                             'organ/organ-mode::organ-link-attribute)
+                      (organ-conceal-overlay buffer (- end 2) end
+                                             'organ/organ-mode::organ-link-attribute))
+                (list (organ-object-face-overlay
+                       object buffer 'organ/organ-mode::organ-link-attribute)
+                      (organ-conceal-overlay buffer begin (+ begin 2)
+                                             'organ/organ-mode::organ-link-attribute)
+                      (organ-conceal-overlay buffer (- end 2) end
+                                             'organ/organ-mode::organ-link-attribute))))))
+
 (macrolet ((define-object-face (type attribute)
              `(defmethod organ/organ-mode::text-object-overlays ((object ,type) buffer)
-                (list (organ-object-face-overlay object buffer ',attribute)))))
-  ;; inline emphasis: *bold*, /italic/, ~code~, and a line starting "# "
-  (define-object-face cltpt/org-mode::org-emph organ-emph-attribute)
-  (define-object-face cltpt/org-mode::org-italic organ-italic-attribute)
-  (define-object-face cltpt/org-mode::org-inline-code organ-inline-code-attribute)
+                (list (organ-object-face-overlay object buffer ',attribute))))
+           (define-emphasis-face (type attribute)
+             `(defmethod organ/organ-mode::text-object-overlays ((object ,type) buffer)
+                (organ-emphasis-overlays object buffer ',attribute))))
+  ;; inline emphasis: *bold*, /italic/, ~code~, _underline_, +strike-through+
+  (define-emphasis-face cltpt/org-mode::org-emph organ-emph-attribute)
+  (define-emphasis-face cltpt/org-mode::org-italic organ-italic-attribute)
+  (define-emphasis-face cltpt/org-mode::org-inline-code organ-inline-code-attribute)
+  (define-emphasis-face cltpt/org-mode::org-underline organ/organ-mode::organ-underline-attribute)
+  (define-emphasis-face cltpt/org-mode::org-strike-through organ/organ-mode::organ-strike-through-attribute)
+  ;; a line starting "# ": the leading marker is part of the comment syntax
   (define-object-face cltpt/org-mode::org-comment organ-comment-attribute)
   ;; $inline$ and $$display$$ math
   (define-object-face cltpt/latex:inline-math organ-math-attribute)
   (define-object-face cltpt/latex:display-math organ-math-attribute))
+
+;; links are handled apart from the macro above because the hidden range
+;; depends on where the description starts, not on a fixed marker width.
+(defmethod organ/organ-mode::text-object-overlays ((object cltpt/org-mode:org-link) buffer)
+  (organ-link-overlays object buffer))
 
 ;;;; Return follows the link under point
 
