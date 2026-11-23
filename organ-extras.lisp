@@ -160,6 +160,59 @@ what the link points at is the only thing such a link has to show."
 (defmethod organ/organ-mode::text-object-overlays ((object cltpt/org-mode:org-link) buffer)
   (organ-link-overlays object buffer))
 
+;;;; the key hints popup
+;;;
+;;; organ-mode answers MODE-TRANSIENT-KEYMAP for its major mode, and the
+;;; transient extension consults that on every completed key sequence: after
+;;; any command in an org buffer it resolves the organ keymap and puts its key
+;;; hints on screen.  Since every lookup resolves to the same keymap, the panel
+;;; is shown again straight after it is drawn, which reads as permanent.  The
+;;; hints are useful when wanted, so they start off and a key toggles them.
+
+(defvar *organ-transient-hints* nil
+  "When true, organ-mode's key hints popup follows the mode keymap.
+Off by default, because it comes back after every command; C-c t in an org
+buffer toggles it (ORGAN-TOGGLE-TRANSIENT-HINTS).")
+
+(defun organ-transient-keymaps (keymap)
+  "KEYMAP together with every keymap its prefixes lead to."
+  (cons keymap
+        (loop :for prefix :in (lem:keymap-prefixes keymap)
+              :for suffix := (lem:prefix-suffix prefix)
+              :when (typep suffix 'lem:keymap)
+                :append (organ-transient-keymaps suffix))))
+
+(defun organ-mark-transient-keymaps (show-p)
+  "Mark the organ-mode keymaps as popup candidates or not.
+The transient extension shows a keymap only when its SHOW-P flag is set, and
+marking the whole tree -- the C-c sub-keymaps too -- is what keeps the popup
+gone when the hints are off: an intermediate prefix would otherwise bring a
+smaller panel back the moment C-c is pressed."
+  (dolist (keymap (organ-transient-keymaps organ/organ-mode:*organ-mode-keymap*))
+    (setf (lem/transient::keymap-show-p keymap) show-p)))
+
+(defmethod lem/transient:mode-transient-keymap ((mode organ/organ-mode:organ-mode))
+  "The organ-mode keymap, but only while the hints are switched on."
+  (when *organ-transient-hints*
+    organ/organ-mode:*organ-mode-keymap*))
+
+(lem:define-command organ-toggle-transient-hints () ()
+  "Show or hide organ-mode's key hints popup."
+  (setf *organ-transient-hints* (not *organ-transient-hints*))
+  (organ-mark-transient-keymaps *organ-transient-hints*)
+  (if *organ-transient-hints*
+      (lem:keymap-activate organ/organ-mode:*organ-mode-keymap*)
+      ;; with the hints off the root keymap resolves to nothing, and a keymap
+      ;; that resolves to nothing is what hides the popup.
+      (lem:keymap-activate lem:*root-keymap*))
+  (lem:message "organ-mode key hints ~:[off~;on~]" *organ-transient-hints*))
+
+;; start out off, and reachable from the org keymap itself so that the popup is
+;; not needed to find the key that brings it back.
+(organ-mark-transient-keymaps *organ-transient-hints*)
+
+(lem:define-key organ/organ-mode:*organ-mode-keymap* "C-c t" 'organ-toggle-transient-hints)
+
 ;;;; Return follows the link under point
 
 (defun organ-link-path (source-buffer path)
