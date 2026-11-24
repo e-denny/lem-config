@@ -239,6 +239,42 @@ uses.")
 (defmethod organ/organ-mode::text-object-overlays ((object cltpt/org-mode:org-keyword) buffer)
   (list (organ-object-face-overlay object buffer 'organ-frontmatter-attribute)))
 
+;;;; footnote labels
+;;;
+;;; cltpt/org-mode has no footnote text object -- a "[fn:1]" is just part of
+;;; the paragraph around it -- so the labels are found by scanning the
+;;; document's text, which is why the method below is on the document: that
+;;; object's text is the whole buffer.  Only the label takes the orange, on a
+;;; definition at the bottom of the file and on a reference inside a sentence
+;;; alike; the citation text keeps the body colour, so it stays as readable as
+;;; the prose pointing at it.
+
+(lem:define-attribute organ-footnote-attribute
+  (t :foreground :base09))
+
+(defmethod organ/organ-mode::text-object-overlays ((object cltpt/org-mode::org-document) buffer)
+  "The face for every [fn:NN] in BUFFER's text, definitions and references."
+  (let ((text (cltpt/base:text-object-text object))
+        (base (cltpt/base:text-object-begin-in-root object))
+        (overlays '()))
+    (loop :with start := 0
+          :for open := (search "[fn:" text :start2 start)
+          :while open
+          :do (let* ((label-start (+ open 4))
+                     (close (position #\] text :start label-start))
+                     (newline (position #\newline text :start label-start)))
+                ;; a label ends at the first "]" and never spans a line
+                (if (and close (or (null newline) (< close newline)))
+                    (progn
+                      (push (lem:make-overlay
+                             (organ/utils:char-offset-to-point buffer (+ base open))
+                             (organ/utils:char-offset-to-point buffer (+ base 1 close))
+                             'organ-footnote-attribute)
+                            overlays)
+                      (setf start (1+ close)))
+                    (setf start label-start))))
+    overlays))
+
 ;;;; the key hints popup
 ;;;
 ;;; organ-mode answers MODE-TRANSIENT-KEYMAP for its major mode, and the
