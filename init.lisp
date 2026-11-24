@@ -196,6 +196,40 @@ again afterwards, which is what the build expects of its own packages."
               symbol)
          #+sbcl (sb-ext:lock-package package))))))
 
+;;; Popup headers underline themselves in a darkened foreground colour, and
+;;; this theme has no foreground to darken: lem-default's specs say
+;;; (:foreground nil), the palette preferring :base00..:base0f, so
+;;; (LEM-CORE:FOREGROUND-COLOR) answers NIL.  The darkening helper,
+;;; LEM/MULTI-COLUMN-LIST::DARKEN-COLOR, hands that to RGB-TO-HSV, which signals
+;;; "The value NIL is not of type LEM/COMMON/COLOR:COLOR" as soon as a popup
+;;; with a column header is drawn.  C-x C-b is one: the buffer list died on its
+;;; "Buffer File" header.  The wrapper falls back to the colour the frontend
+;;; reports for foreground text, which is what the theme's missing entry would
+;;; have named, and gives up on the underline (rather than erroring) when even
+;;; that is absent.
+;;;
+;;; The function is patched rather than the theme because the theme is not
+;;; ours; Lem locks its packages, hence the unlock/lock, and the saved original
+;;; makes re-evaluating this file replace the wrapper instead of stacking a
+;;; second one on it.
+
+(defvar *unpatched-darken-color*
+  (symbol-function 'lem/multi-column-list::darken-color)
+  "DARKEN-COLOR as Lem defines it, saved before the wrapper below.")
+
+#+sbcl (sb-ext:unlock-package :lem/multi-column-list)
+(unwind-protect
+     (setf (symbol-function 'lem/multi-column-list::darken-color)
+           (lambda (color &key (factor 0.5))
+             (let ((color (or color
+                              (let ((foreground (lem-if:get-foreground-color
+                                                 (implementation))))
+                                (and foreground
+                                     (lem/common/color:color-to-hex-string foreground))))))
+               (when color
+                 (funcall *unpatched-darken-color* color :factor factor)))))
+  #+sbcl (sb-ext:lock-package :lem/multi-column-list))
+
 ;;; organ-mode and cltpt are checkouts in extensions/, each with its own
 ;;; repository; org-latex-preview is configuration, so it lives here.
 (dolist (extension '("extensions/organ-mode/" "extensions/cltpt/" "org-latex-preview/"))
