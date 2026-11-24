@@ -45,10 +45,12 @@ client by lem-server's /local/ route.")
 (defconstant +retry-limit+ 120
   "Give up patching after this many attempts, one every half second.")
 
-(defvar *patch-source*
+(defparameter *patch-source*
   (uiop:read-file-string
    (asdf:system-relative-pathname "org-latex-preview" "src/webview-image-patch.js"))
-  "the script injected into the client, see webview-image-patch.js.")
+  "the script injected into the client, see webview-image-patch.js.
+DEFPARAMETER rather than DEFVAR: the file is read when this system is compiled,
+and a reloaded system has to send the script it was just compiled from.")
 
 (defvar *original-ensure-attribute* nil
   "lem-server's own attribute encoder, kept so the image fields can be added
@@ -186,11 +188,140 @@ the part of that box above the text baseline, as a percentage of its height."
                 encoded))))))
 
 (defun install-image-object-width ()
-  "Report how many character cells an image covers, so that the text after it
-is placed beyond it rather than on top of it."
+  "Report how many character columns an image covers, so that the text after it
+is placed beyond it rather than on top of it.
+
+LEM-CORE:OBJECT-WIDTH caches what it measures in the WIDTH slot of the drawing
+object, and only measures when that slot is empty.  An image object is created
+with its pixel width in that same slot -- IMAGE-OBJECT's WIDTH is
+DRAWING-OBJECT's WIDTH, given an initarg -- so the plain image object reports
+its pixels as columns: a 438px equation laid out as 438 columns, far wider
+than the window, which wrapped the line and pushed the text after an inline
+preview a screen's width away.  Emptying the slot as the object is built makes
+it measure through OBJECT-WIDTH below, and measure once."
+  (defmethod initialize-instance :after ((object lem-core/display:image-object)
+                                          &key &allow-other-keys)
+    (when (webview-implementation-p)
+      (setf (lem-core::drawing-object-width object) nil)))
   (defmethod lem-server::object-width ((object lem-core/display:image-object))
-    (let ((pixels (or (ignore-errors (lem-core/display:image-object-width object)) 0)))
-      (max 1 (ceiling (max 1 pixels) (max 1 *cell-width-px*))))))
+    (multiple-value-bind (width height) (image-pixels object)
+      (declare (ignore height))
+      (max 1 (ceiling (max 1 width) (max 1 *cell-width-px*))))))
+
+(defun image-pixels (object)
+  "The pixel width and height of the image OBJECT.
+
+They are read from the attribute the image was made from rather than from the
+object's own WIDTH and HEIGHT slots.  Those slots are the ones
+LEM-CORE:OBJECT-WIDTH and the size comparisons use, and an image object is
+built with its pixel width in the first of them, which this frontend counts in
+character columns; see INSTALL-IMAGE-OBJECT-WIDTH."
+  (let ((attribute (ignore-errors (lem-core::image-object-attribute object))))
+    (values (or (and attribute (lem:attribute-width attribute))
+                (ignore-errors (lem-core/display:image-object-width object))
+                0)
+            (or (and attribute (lem:attribute-height attribute))
+                (ignore-errors (lem-core/display:image-object-height object))
+                0))))
+
+(defun image-rows (object)
+  "How many character rows an image covers, at the client's cell height."
+  (multiple-value-bind (width height) (image-pixels object)
+    (declare (ignore width))
+    (max 1 (ceiling height (max 1 *cell-height-px*)))))
+
+(defun install-image-object-height ()
+  "Reserve the rows an image covers, not the single row of every other object.
+
+This server frontend lays a window out in character rows, not pixels: the
+client multiplies the row index it is sent by its cell height.  So the height
+of a drawing object is a number of rows here, and every object used to answer
+1 -- including images, which are measured in pixels.  An image taller than one
+row was therefore laid out with the next lines inside it: the client paints
+rows in order, each after filling it with its background, so the line below an
+image painted over the image's lower part.  A fraction's numerator and bar
+survived and its denominator was cut off by the first line that followed it.
+Reporting the rows an image really needs makes the rows below it start below
+it.  It is also what the client's clamp of the image into its block assumes."
+  (defmethod lem-if:object-height ((implementation lem-server:jsonrpc)
+                                   (object lem-core/display:image-object))
+    (declare (ignore implementation))
+    (image-rows object)))
+
+(defvar *original-render-line* nil)
+
+(defun centered-attribute-p (attribute)
+  "Whether ATTRIBUTE asks for the image it carries to be centred."
+  (and attribute
+       (ignore-errors (lem-core::attribute-value attribute :center))))
+
+(defun centered-line-p (objects)
+  "Whether OBJECTS are a display fragment standing alone on its line.
+
+That is: an image that asks to be centred, and nothing but images that do, the
+spaces between them, and the cursor or the background that fills to the end of
+a line with the cursor on it.  A line of that shape is what a display fragment
+is reduced to once its source is concealed, and the whole line is what gets
+centred -- centring each image on its own would stack the fragments of a line
+that holds two of them, as organ-mode puts the two halves of a balance-sheet
+identity on one line."
+  (and (loop :for object :in objects
+             :always (typecase object
+                       (lem-core/display:image-object
+                        (centered-attribute-p
+                         (lem-core::image-object-attribute object)))
+                       (lem-core/display:text-object
+                        (every (lambda (character) (char= character #\Space))
+                               (lem-core/display:text-object-string object)))
+                       ((or lem-core/display:eol-cursor-object
+                            lem-core/display:extend-to-eol-object)
+                        t)
+                       (t nil)))
+       (some (lambda (object) (typep object 'lem-core/display:image-object)) objects)))
+
+(defun install-line-rendering ()
+  "Clear every row of a line, not only the row it starts at, and centre the
+lines that hold an isolated display fragment.
+
+The client clears one row per rendered line, so the rows an image adds would
+keep whatever an earlier frame drew there -- the lower half of a wider
+preview, or of one whose image now sits elsewhere on the line.  Those rows
+belong to the image's line alone: no other line draws in them, and clearing
+them whole is what lets the image be moved or shrunk without leaving a ghost
+beside it.  The modeline is not this, so it is left alone.
+
+Centring shifts where the line is drawn, not the line itself: the column the
+line starts at is what is moved, so everything on the line moves together and
+the buffer keeps the layout it computed."
+  ;; the original is kept from the first install, and the wrapper is rebuilt
+  ;; every time, so a reloaded file replaces the previous wrapper rather than
+  ;; nesting one inside it -- or, worse, leaving it in place because the
+  ;; original was already saved.
+  (unless *original-render-line*
+    (setf *original-render-line* (symbol-function 'lem-server::render-line)))
+  (let ((original *original-render-line*))
+    (setf (symbol-function 'lem-server::render-line)
+          (lambda (jsonrpc view x y objects)
+            (when (eq (symbol-value 'lem-server::*put-target*) :edit-area)
+              (let ((rows (loop :for object :in objects
+                                :maximize (lem-if:object-height
+                                           (lem:implementation) object))))
+                (loop :for row :from (1+ y) :below (+ y rows)
+                      :do (lem-server::notify*
+                           jsonrpc
+                           "clear-eol"
+                           (lem-server/utils:hash
+                            "viewInfo" (lem-server::view-id-hash view)
+                            "x" 0
+                            "y" row)))
+                (when (centered-line-p objects)
+                  (let* ((implementation (lem:implementation))
+                         (width (loop :for object :in objects
+                                      :sum (lem-if:object-width implementation object)))
+                         (view-width (lem-if:view-width implementation view)))
+                    (when (< width view-width)
+                      (setf x (+ x (floor (- view-width width) 2))))))))
+            (funcall original jsonrpc view x y objects)))))
 
 (defun install-image-object-drawing ()
   "Send an image object to the client as a run of placeholder cells carrying
@@ -213,6 +344,8 @@ the image attribute.  The patched client paints the image over those cells."
         (install-redraw-method)
         (install-attribute-encoding)
         (install-image-object-width)
+        (install-image-object-height)
+        (install-line-rendering)
         (install-image-object-drawing)
         t)
     (error (condition)

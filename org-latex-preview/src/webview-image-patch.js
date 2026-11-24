@@ -32,11 +32,6 @@
     }
   };
 
-  if (proto.__lemImagePatch) {
-    reportMetrics();
-    return 'already';
-  }
-
   // The surface method that paints a run of cells is `drawText` in this build;
   // older bundles had the same method under the name `print`.  Only the near-
   // est one to the instance is wanted: the base class carries a no-op of the
@@ -60,7 +55,16 @@
   if (!owner) {
     return 'no-draw-method';
   }
-  const originalDraw = owner[method];
+
+  // Re-evaluating this script (the Lisp side was reloaded) replaces the
+  // wrapper, so it has to wrap the client's own method again rather than the
+  // previous, now stale, wrapper.  The decoded images survive the reload,
+  // since a reload has nothing to say about them.
+  const seen = proto.__lemImageOriginalDraw;
+  if (!seen || seen.owner !== owner || seen.method !== method) {
+    proto.__lemImageOriginalDraw = { owner: owner, method: method, fn: owner[method] };
+  }
+  const originalDraw = proto.__lemImageOriginalDraw.fn;
 
   // A glyph starts at the top of its cell (drawText sets textBaseline to
   // 'top'), so the text baseline sits one font ascent below the cell top.
@@ -72,7 +76,7 @@
     return metrics.fontBoundingBoxAscent || option.fontSize * 0.8;
   })();
 
-  const images = new Map();
+  const images = proto.__lemImages || (proto.__lemImages = new Map());
   let redrawPending = false;
 
   // An image arrives on screen only after it has decoded, which is after the
@@ -117,13 +121,22 @@
     const ascent = (attribute.imageAscent === null || attribute.imageAscent === undefined
       ? 90
       : attribute.imageAscent) / 100;
-    const top = gy + baseline - ascent * height;
+    // The rows Lisp reserved for this image: the rest of the display is laid
+    // out below them, so the image has to stay inside them.  Baseline
+    // alignment is what an inline fragment wants and is kept whenever the
+    // image fits; a display fragment is taller than the ascent of the text
+    // baseline it hangs from, so it is nudged down to the top of its block
+    // rather than spilling into the lines above and below.
+    const rows = Math.max(1, Math.ceil(height / option.fontHeight));
+    const block = rows * option.fontHeight;
+    const top = Math.min(Math.max(gy + baseline - ascent * height, gy),
+                         gy + block - height);
     const background = attribute.background || option.background;
     const image = imageFor(attribute.image);
 
     self.drawingQueue.push((ctx) => {
       ctx.fillStyle = background;
-      ctx.fillRect(gx, gy, width, height);
+      ctx.fillRect(gx, top, width, height);
       if (image.complete && image.naturalWidth > 0) {
         ctx.drawImage(image, gx, top, width, height);
         window.__lemImageDraws = (window.__lemImageDraws || 0) + 1;

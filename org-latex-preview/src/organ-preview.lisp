@@ -123,6 +123,38 @@ cursor is inside it."
         ((eq organ/organ-mode::*organ-latex-preview-foreground* :none) nil)
         (t (theme-foreground-color))))
 
+;;; Alignment.  A fragment that is not inline -- display math, whatever
+;;; delimiters it was written with -- stands on a line of its own and belongs
+;;; in the middle of that line, where latex would centre it on the page.  An
+;;; inline fragment stays where its sentence put it, and a focused fragment
+;;; shows its image after its source on the source's line, which is no place
+;;; to move it.  The decision is recorded on the image attribute, which the
+;;; frontend reads: see INSTALL-LINE-RENDERING in webview-images.lisp.
+
+(defvar *original-preview-image-attribute* nil)
+
+(defun install-preview-alignment ()
+  (unless *original-preview-image-attribute*
+    (setf *original-preview-image-attribute*
+          (symbol-function 'organ/organ-mode::preview-image-attribute)))
+  (let ((original *original-preview-image-attribute*))
+    (setf (symbol-function 'organ/organ-mode::preview-image-attribute)
+          (lambda (preview)
+            (let ((attribute (funcall original preview)))
+              (when (and attribute
+                         (not (organ/organ-mode::preview-inline-p preview))
+                         (not (organ/organ-mode::preview-focused-p preview)))
+                (setf (lem-core::attribute-value attribute :center) t))
+              attribute))))
+  ;; The attributes of the previews already on screen were built by the
+  ;; previous definition, so they are rebuilt here: previews are otherwise only
+  ;; re-rendered when their fragment is recompiled.
+  (dolist (buffer (lem:buffer-list))
+    (when (organ-buffer-p buffer)
+      (lem:with-current-buffer buffer
+        (dolist (preview (organ/organ-mode::buffer-previews buffer))
+          (organ/organ-mode::render-preview preview))))))
+
 (defun install-preview-defaults ()
   (setf organ/organ-mode::*organ-latex-preview-auto* *auto-preview*
         organ/organ-mode::*organ-latex-preview-foreground*
@@ -214,6 +246,7 @@ cursor is inside it."
   "Install everything: server-side image drawing, interface answers, defaults."
   (install-drawing-support)
   (install-preview-rendering)
+  (install-preview-alignment)
   (install-interface-answers)
   (install-preview-defaults)
   (install-compiler-directories)
