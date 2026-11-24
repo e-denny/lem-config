@@ -160,6 +160,85 @@ what the link points at is the only thing such a link has to show."
 (defmethod organ/organ-mode::text-object-overlays ((object cltpt/org-mode:org-link) buffer)
   (organ-link-overlays object buffer))
 
+;;;; headings, frontmatter
+;;;
+;;; organ-mode paints every header title the same white and leaves the level
+;;; to the stars, and paints the "#+keyword" half of a metadata line blue
+;;; while the rest of that line stays in the body colour.  Headings take a
+;;; colour per level here, so depth reads without counting stars, and a
+;;; keyword line is greyed from "#+" to the end of the line, so a file's
+;;; frontmatter recedes the way a comment does.  The stars keep their dim
+;;; grey and the TODO keyword its own face: they mark structure, the title
+;;; carries the colour.
+
+(lem:define-attribute organ-heading-1-attribute
+  (t :foreground :base0e :bold t))
+
+(lem:define-attribute organ-heading-2-attribute
+  (t :foreground :base0f :bold t))
+
+(lem:define-attribute organ-heading-3-attribute
+  (t :foreground :base0b :bold t))
+
+(lem:define-attribute organ-heading-4-attribute
+  (t :foreground :base0a :bold t))
+
+(defparameter *organ-heading-attributes*
+  (vector 'organ-heading-1-attribute
+          'organ-heading-2-attribute
+          'organ-heading-3-attribute
+          'organ-heading-4-attribute)
+  "The heading face for levels 1 to 4; deeper levels cycle through them.
+The names are base16 keys of the colour theme, like organ-mode's own faces:
+1 is pink (:base0e), 2 rose (:base0f), 3 green (:base0b), 4 yellow (:base0a).
+Level 2 is rose rather than blue on purpose: :base0d is the link colour (and
+the keyword colour), and a heading has to be told apart from a link at a
+glance.  :base0f is the one palette entry nothing else in this configuration
+uses.")
+
+(defun organ-heading-face (level)
+  "The heading face for LEVEL, cycling through the four defined ones."
+  (aref *organ-heading-attributes*
+        (mod (max (1- level) 0) (length *organ-heading-attributes*))))
+
+(defun organ-header-level (object)
+  "OBJECT's level: how many stars its header rule matched."
+  (let* ((match (cltpt/base:text-object-match object))
+         (stars (cltpt/combinator:find-submatch match 'cltpt/org-mode::stars)))
+    (if stars
+        (- (cltpt/combinator:match-end stars)
+           (cltpt/combinator:match-begin stars))
+        1)))
+
+;; the same overlays organ-mode puts on a header, with the title's face chosen
+;; by level; the submatch ids are cltpt/org-mode's header rule.
+(defmethod organ/organ-mode::text-object-overlays ((object cltpt/org-mode:org-header) buffer)
+  (let ((title (organ-heading-face (organ-header-level object))))
+    (remove nil
+            (list
+             (organ/organ-mode::overlay-for-submatch
+              buffer object 'cltpt/org-mode::title title)
+             (organ/organ-mode::overlay-for-submatch
+              buffer object 'cltpt/org-mode::stars
+              'organ/organ-mode::organ-header-stars-attribute)
+             (organ/organ-mode::overlays-for-submatches
+              buffer object 'cltpt/org-mode::timestamp
+              'organ/organ-mode::organ-timestamp-attribute)
+             (organ/organ-mode::overlays-for-submatches
+              buffer object 'cltpt/org-mode::todo-timestamp
+              'organ/organ-mode::organ-timestamp-attribute)
+             (organ/organ-mode::overlay-for-submatch
+              buffer object 'cltpt/org-mode::todo-keyword
+              'organ/organ-mode::organ-header-todo-attribute)))))
+
+(lem:define-attribute organ-frontmatter-attribute
+  (t :foreground :base03))
+
+;; the whole "#+key: value" line, not just the keyword: the object's span is
+;; the line, and begin-in-root/end-in-root do not include the newline.
+(defmethod organ/organ-mode::text-object-overlays ((object cltpt/org-mode:org-keyword) buffer)
+  (list (organ-object-face-overlay object buffer 'organ-frontmatter-attribute)))
+
 ;;;; the key hints popup
 ;;;
 ;;; organ-mode answers MODE-TRANSIENT-KEYMAP for its major mode, and the
@@ -277,3 +356,147 @@ editor's working directory otherwise, and a relative link then never opens."
       ((organ-link-at-point) (organ/organ-mode::organ-open-at-point))
       (table-found (organ/organ-mode::org-table-navigate table-found 0 1))
       (list-found (organ/organ-mode::org-list-newline)))))
+
+;;;; property drawers start folded
+;;;
+;;; A :PROPERTIES: drawer is metadata, not prose, and a file that gives every
+;;; heading a :CUSTOM_ID: spends two lines per heading on it.  Lem folds only
+;;; on request, so the drawers are folded here when organ-mode starts on a
+;;; buffer.  A fold opens while the cursor is inside it and closes again on
+;;; leaving (:reveal), so nothing becomes uneditable; a drawer opened by hand
+;;; stays open, because this runs at mode start and not on every change.
+
+(defun organ-fold-property-drawers ()
+  "Fold every :PROPERTIES: drawer in the current buffer that is not folded yet."
+  (let ((buffer (lem:current-buffer))
+        (tree (organ/organ-mode:current-tree)))
+    (when tree
+      (cltpt/base:map-text-object-with-pos-in-root
+       tree
+       (lambda (object parent-pos)
+         (declare (ignore parent-pos))
+         (when (typep object 'cltpt/org-mode:org-prop-drawer)
+           (let ((begin (cltpt/base:text-object-begin-in-root object))
+                 (end (cltpt/base:text-object-end-in-root object)))
+             (unless (organ/organ-mode::organ-fold-overlay-on-line
+                      (organ/utils:char-offset-to-point buffer begin)
+                      buffer)
+               (organ/organ-mode:organ-fold-region buffer begin end
+                                                   :cursor-behavior :reveal)))))))))
+
+;; weight -1: the mode hook holds ORGAN-MODE-INIT-ALL at 0, which is what
+;; parses the tree and stamps the offsets this function walks.
+(lem:add-hook organ/organ-mode::*organ-mode-hook* 'organ-fold-property-drawers -1)
+
+(lem:define-command organ-fold-drawers () ()
+  "Fold every :PROPERTIES: drawer in the current buffer.
+The fold the mode hook applies when a file opens, for a buffer that was open
+before this configuration was loaded."
+  (organ-fold-property-drawers))
+
+;;;; the clip that starts a scrolled wrapped line
+;;;
+;;; Lem draws a wrapped line from the window view point's column:
+;;; CALL-DO-LOGICAL-LINE hands CREATE-LOGICAL-LINE the view point, and
+;;; WINDOW-SCROLL parks that point on a wrap boundary of the line as it is
+;;; stored in the buffer (MOVE-TO-NEXT-VIRTUAL-LINE and FORWARD-LINE-WRAP
+;;; measure the raw string).  CREATE-LOGICAL-LINE then clips the string it is
+;;; about to draw at that column -- but that string has already had the
+;;; :invisible and :display overlays spliced out of it, which is how the
+;;; markup above is concealed.  A raw column can therefore land past the end
+;;; of the string being clipped: in a 140-column window any longer line parks
+;;; the view point on column 139, and when concealing the markup on that line
+;;; leaves fewer than 139 characters SUBSEQ signals "The bounding indices 139
+;;; and NIL are bad for a sequence of length 91".  The display loop catches
+;;; it, reports it with MESSAGE and abandons the redraw, so the message comes
+;;; back on every scroll -- the popup that appeared over the buffer.
+;;;
+;;; The patch translates the view point column through the same splices
+;;; before the original clips at it, and puts the column back afterwards.
+;;; ADJUST-CHARPOS-FOR-SPLICES already does the translation for the
+;;; virtual-item anchors in that function; the splice list is built the way
+;;; that function builds it, from the overlays of the visual line.
+
+(defun organ-visual-line-splices (point overlays)
+  "The (START END REPLACEMENT) splices CREATE-LOGICAL-LINE will apply around POINT.
+START and END are columns of the raw line string, the coordinates SPLICE-STRING
+takes, so ADJUST-CHARPOS-FOR-SPLICES turns a raw column into a column of the
+drawn line."
+  (with-point ((start point)
+               (end point))
+    (line-start start)
+    (line-end end)
+    ;; the visual line reaches across newlines hidden by :invisible overlays
+    (loop :until (lem:last-line-p end)
+          :while (lem-core::invisible-overlay-covering end overlays)
+          :do (lem:line-offset end 1)
+              (lem:line-end end))
+    (let* ((string (lem-core::collect-visual-line-string-and-attributes start end))
+           (overlays (remove-if-not
+                      (lambda (overlay)
+                        (and (lem:point<= (lem:overlay-start overlay) end)
+                             (lem:point<= start (lem:overlay-end overlay))))
+                      overlays)))
+      (flet ((start-column (overlay)
+               (let ((from (lem:overlay-start overlay)))
+                 (if (lem:point<= start from)
+                     (count-characters start from)
+                     0)))
+             (end-column (overlay)
+               (let ((to (lem:overlay-end overlay)))
+                 (when (lem:point<= to end)
+                   (count-characters start to)))))
+        (loop :for overlay :in overlays
+              :for invisible := (lem:overlay-get overlay :invisible)
+              :for display := (lem:overlay-get overlay :display)
+              :when (or invisible display)
+                :append (let* ((splice-start (start-column overlay))
+                               (splice-end (or (end-column overlay)
+                                               (length string)))
+                               (replacement (cond
+                                              (display
+                                               (let ((value (alexandria:ensure-list display)))
+                                                 (if (stringp (first value))
+                                                     (first value)
+                                                     "")))
+                                              ((eq invisible :ellipsis) "...")
+                                              (t ""))))
+                          (when (< splice-start splice-end)
+                            (list (list splice-start splice-end replacement)))))))))
+
+(defvar *unpatched-create-logical-line*
+  (symbol-function 'lem-core::create-logical-line)
+  "CREATE-LOGICAL-LINE as Lem defines it, saved before the wrapper below.
+The wrapper always calls this, so re-evaluating this file replaces the patch
+instead of wrapping the previous wrapper and translating the column twice.")
+
+(defun create-logical-line-with-drawn-column (point overlays active-modes)
+  "LEM-CORE::CREATE-LOGICAL-LINE with the view point column in drawn coordinates.
+The column it passes on has to be counted in the string the clip is applied
+to, which has the concealed ranges spliced out of it; see the comment above."
+  (let ((column (lem:point-charpos point)))
+    (if (zerop column)
+        (funcall *unpatched-create-logical-line* point overlays active-modes)
+        ;; a failure here must not take the redraw down with it: fall through
+        ;; to the unpatched call, which draws everything but the one line whose
+        ;; column overruns -- the behaviour this patch exists to improve on.
+        (let ((translated (ignore-errors
+                           (let ((splices (organ-visual-line-splices point overlays)))
+                             (when splices
+                               (lem-core::adjust-charpos-for-splices column splices))))))
+          (if (or (null translated) (= translated column))
+              (funcall *unpatched-create-logical-line* point overlays active-modes)
+              (progn
+                (setf (lem:point-charpos point) translated)
+                (unwind-protect
+                     (funcall *unpatched-create-logical-line* point overlays active-modes)
+                  (setf (lem:point-charpos point) column))))))))
+
+;; Lem locks its packages, so the definition is swapped with the package
+;; unlocked and locked again afterwards -- the same dance `ensure-interface-stub'
+;; does in init.lisp for the interfaces this build lacks.
+#+sbcl (sb-ext:unlock-package :lem-core)
+(unwind-protect
+     (setf (symbol-function 'lem-core::create-logical-line)
+           #'create-logical-line-with-drawn-column)
+  #+sbcl (sb-ext:lock-package :lem-core))
