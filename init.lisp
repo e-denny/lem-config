@@ -305,6 +305,35 @@ again afterwards, which is what the build expects of its own packages."
   (error (condition)
     (format *error-output* "~&organ-mode extras unavailable: ~A~%" condition)))
 
+;;; org-modern (user extension): a modern look for organ buffers.
+;;;
+;;; A Lem port of Emacs org-modern under extensions/org-modern/: headline
+;;; stars, TODO/DONE and priority labels, tags, timestamps, list bullets,
+;;; checkboxes, rules, keyword prefixes and progress cookies, all as overlay
+;;; decorations on top of the unchanged buffer text.  The extension owns its
+;;; overlays, so organ-mode's syntax highlighting and its per-change redraw
+;;; leave them alone; it also skips folded lines and rebuilds when a fold
+;;; changes, since folding only adds or removes overlays and never runs the
+;;; change hooks.  See its README for the whole mapping and the differences
+;;; from org-modern (no boxes, no font scaling, tables left as they are).
+;;;
+;;; It is loaded after organ-mode, because global-org-modern-mode looks up the
+;;; organ-mode major-mode object to attach its mode hook; loading earlier would
+;;; find no Org mode to follow.  The command is looked up at run time for the
+;;; same reason as the handlers above: a package-qualified symbol would be a
+;;; reader error if the system failed to load.
+(let ((source (merge-pathnames "extensions/org-modern/" (lem-home))))
+  (pushnew source asdf:*central-registry* :test #'equal))
+(handler-case
+    (progn
+      (asdf:load-system "lem-org-modern")
+      (let ((enable (find-symbol "GLOBAL-ORG-MODERN-MODE" :lem-org-modern)))
+        (unless enable
+          (error "package LEM-ORG-MODERN has no GLOBAL-ORG-MODERN-MODE"))
+        (funcall enable t)))
+  (error (condition)
+    (format *error-output* "~&org-modern unavailable: ~A~%" condition)))
+
 ;;; org-latex-preview renders latex fragments in an organ buffer as the images
 ;;; latex typesets, the way org-mode's own preview does.  It is a system rather
 ;;; than a file because it adds text objects to cltpt, whose rules are rebuilt
