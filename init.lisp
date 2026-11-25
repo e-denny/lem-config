@@ -67,7 +67,7 @@
 
 ;;; Vertico-style completion (user extensions).
 ;;;
-;;; The prompt and completion setup that used to live here is three systems
+;;; The prompt and completion setup that used to live here is four systems
 ;;; under extensions/, each loaded from its own directory:
 ;;;
 ;;;   vertico     bottom-of-frame prompt, width cap and centering, candidate
@@ -78,21 +78,70 @@
 ;;;               for commands, buffers and files, plus the patches that make
 ;;;               lem's own completion helpers orderless.
 ;;;   marginalia  command docstrings next to the command name in M-x.
+;;;   consult     search and navigation commands that put their candidates in
+;;;               the same prompt: buffers, recent files, bookmarks, lines,
+;;;               grep/ripgrep/git-grep, find/fd, imenu, outline, kill ring,
+;;;               histories, themes and mode commands.  See its README for the
+;;;               list and for the features it leaves to Lem.
 ;;;
 ;;; Loading a system applies it: the settings, keymap bindings and function
 ;;; patches run at load, so the order below matters only in that marginalia
 ;;; wraps orderless's completion function.  See each extension's README for its
 ;;; knobs.  Failures must not abort the rest of init, hence the handler.
 
-(dolist (extension '("vertico" "orderless" "marginalia"))
+(dolist (extension '("vertico" "orderless" "marginalia" "consult"))
   (pushnew (merge-pathnames (format nil "extensions/~a/" extension) (lem-home))
            asdf:*central-registry* :test #'equal))
 
 (handler-case
-    (dolist (system '("lem-vertico" "lem-orderless" "lem-marginalia"))
+    (dolist (system '("lem-vertico" "lem-orderless" "lem-marginalia" "lem-consult"))
       (asdf:load-system system))
   (error (condition)
     (format *error-output* "~&completion extensions unavailable: ~A~%" condition)))
+
+;;; Consult keybindings.
+;;;
+;;; C-c h is the full prefix and is safe: local keymaps still win (lsp-mode's
+;;; C-c h is its hover command).  The direct bindings below are the ones worth
+;;; pressing without a prefix: three override a Lem command that does the same
+;;; job with a smaller list, the rest were unbound.  C-x b itself is left alone
+;;; because Lem's SELECT-BUFFER also creates a missing buffer; the enhanced
+;;; buffer/file/bookmark list is on C-x C-b instead.
+
+(let* ((package (find-package :lem-consult))
+       (command (lambda (name)
+                  (let ((symbol (and package (find-symbol name package))))
+                    (and symbol (fboundp symbol) symbol))))
+       (keymap (and package
+                    (let ((symbol (find-symbol "*CONSULT-KEYMAP*" package)))
+                      (and symbol (boundp symbol) (symbol-value symbol))))))
+  (when keymap
+    (define-key *global-keymap* "C-c h" keymap))
+  (dolist (binding
+           '(;; Same job, enhanced list.
+             ("C-x C-b" "CONSULT-BUFFER")
+             ("C-x C-h" "CONSULT-RECENT-FILE")
+             ("M-g" "CONSULT-GOTO-LINE")
+             ;; M-s is the search prefix; these keys were free.
+             ("M-s l" "CONSULT-LINE")
+             ("M-s L" "CONSULT-LINE-MULTI")
+             ("M-s g" "CONSULT-GREP")
+             ("M-s r" "CONSULT-RIPGREP")
+             ("M-s f" "CONSULT-FIND")
+             ("M-s F" "CONSULT-FD")
+             ("M-s i" "CONSULT-IMENU")
+             ("M-s I" "CONSULT-IMENU-MULTI")
+             ("M-s o" "CONSULT-OUTLINE")
+             ("M-s O" "CONSULT-ORG-HEADING")
+             ("M-s y" "CONSULT-YANK-FROM-KILL-RING")
+             ("M-s h" "CONSULT-HISTORY")
+             ("M-s c" "CONSULT-MODE-COMMAND")
+             ("M-s m" "CONSULT-MINOR-MODE-MENU")
+             ;; The project prefix has room beside project-find-file.
+             ("C-x p b" "CONSULT-PROJECT-BUFFER")))
+    (let ((symbol (funcall command (second binding))))
+      (when symbol
+        (define-key *global-keymap* (first binding) symbol)))))
 
 
 ;;; Which-key: show the keys that follow a prefix.
